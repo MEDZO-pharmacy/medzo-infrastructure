@@ -1,0 +1,73 @@
+name: Gateway CI and Azure deployment
+on:
+  pull_request:
+    branches: [main, Dev]
+    paths: ['api-gateway/**', '.github/workflows/gateway-deploy-azure.yml']
+  push:
+    branches: [main, Dev]
+    paths: ['api-gateway/**', '.github/workflows/gateway-deploy-azure.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore Medzo.Gateway.slnx
+      - run: dotnet build Medzo.Gateway.slnx -c Release --no-restore
+      - run: dotnet test Medzo.Gateway.slnx -c Release --no-build
+      - run: docker build -f docker/Dockerfile -t medzo-api-gateway:ci .
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/Dev' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-gateway
+    environment: production
+    concurrency:
+      group: gateway-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
+      APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+      GATEWAY_URL: ${{ vars.GATEWAY_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and push versioned image
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${REGISTRY_NAME:?Set AZURE_REGISTRY_NAME}"
+          : "${APP_NAME:?Set AZURE_WEBAPP_NAME}"
+          : "${GATEWAY_URL:?Set GATEWAY_URL}"
+          az acr login --name "$REGISTRY_NAME"
+          registry=$(az acr show --name "$REGISTRY_NAME" --query loginServer -o tsv)
+          image="$registry/medzo-api-gateway:$GITHUB_SHA"
+          docker build -f docker/Dockerfile -t "$image" .
+          docker push "$image"
+          echo "GATEWAY_IMAGE=$image" >> "$GITHUB_ENV"
+      - uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.APP_NAME }}
+          images: ${{ env.GATEWAY_IMAGE }}
+      - name: Check gateway liveness
+        run: curl --fail --retry 12 --retry-all-errors --retry-delay 10 --max-time 20 "${GATEWAY_URL%/}/health"

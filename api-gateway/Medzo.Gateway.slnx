@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Medzo.Gateway/Medzo.Gateway.csproj" />
+  <Project Path="tests/Medzo.Gateway.Tests/Medzo.Gateway.Tests.csproj" />
+</Solution>
