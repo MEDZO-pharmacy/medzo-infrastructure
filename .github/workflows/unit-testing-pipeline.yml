@@ -1,0 +1,105 @@
+name: Medzo Unit Testing Pipeline
+
+on:
+  push:
+    branches: [feature/se3112-unit-mocking]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: Run all Medzo unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out pipeline repository
+        uses: actions/checkout@v4
+        with:
+          path: medzo-infrastructure
+
+      # This secret is a fine-grained GitHub token with Contents: Read access to
+      # the other private MEDZO-pharmacy repositories.
+      - name: Check out Auth service
+        uses: actions/checkout@v4
+        with:
+          repository: MEDZO-pharmacy/medzo-user-auth-service
+          ref: feature/se3112-unit-mocking
+          token: ${{ secrets.MEDZO_REPO_TOKEN }}
+          path: medzo-user-auth-service
+
+      - name: Check out Catalogue and Inventory service
+        uses: actions/checkout@v4
+        with:
+          repository: MEDZO-pharmacy/medzo-catalogue-inventory-service
+          ref: feature/se3112-unit-mocking
+          token: ${{ secrets.MEDZO_REPO_TOKEN }}
+          path: medzo-catalogue-inventory-service
+
+      - name: Check out Purchasing and Supplier service
+        uses: actions/checkout@v4
+        with:
+          repository: MEDZO-pharmacy/medzo-purchasing-supplier-service
+          ref: feature/se3112-unit-mocking
+          token: ${{ secrets.MEDZO_REPO_TOKEN }}
+          path: medzo-purchasing-supplier-service
+
+      - name: Check out Sales and Reporting service
+        uses: actions/checkout@v4
+        with:
+          repository: MEDZO-pharmacy/medzo-sales-reporting-service
+          ref: feature/se3112-unit-mocking
+          token: ${{ secrets.MEDZO_REPO_TOKEN }}
+          path: medzo-sales-reporting-service
+
+      - name: Check out Frontend
+        uses: actions/checkout@v4
+        with:
+          repository: MEDZO-pharmacy/medzo-frontend
+          ref: feature/se3112-unit-mocking
+          token: ${{ secrets.MEDZO_REPO_TOKEN }}
+          path: medzo-frontend
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: medzo-frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: medzo-frontend
+        run: npm ci
+
+      - name: Run the complete unit-test pipeline
+        shell: pwsh
+        working-directory: medzo-infrastructure
+        run: ./scripts/Run-UnitTests.ps1
+
+      - name: Add report locations to the run summary
+        if: always()
+        shell: pwsh
+        working-directory: medzo-infrastructure
+        run: |
+          "## Unit testing pipeline" >> $env:GITHUB_STEP_SUMMARY
+          "- Auth, Catalogue/Inventory, Purchasing/Supplier, and Sales/Reporting run with xUnit and Coverlet." >> $env:GITHUB_STEP_SUMMARY
+          "- Frontend runs with Vitest." >> $env:GITHUB_STEP_SUMMARY
+          "- Download the **unit-test-evidence** artifact for TRX and Cobertura coverage files." >> $env:GITHUB_STEP_SUMMARY
+          if (Test-Path test-results) {
+            "`n### Generated coverage files" >> $env:GITHUB_STEP_SUMMARY
+            Get-ChildItem -Recurse test-results -Filter coverage.cobertura.xml | ForEach-Object { "- ``$($_.FullName)``" >> $env:GITHUB_STEP_SUMMARY }
+          }
+
+      - name: Upload unit-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-evidence
+          path: medzo-infrastructure/test-results
+          if-no-files-found: warn
